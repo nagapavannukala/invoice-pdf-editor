@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: invoice-pdf-editor
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    plan: free
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
