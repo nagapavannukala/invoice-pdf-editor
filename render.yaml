@@ -11,3 +11,5 @@ services:
         value: 3.11.9
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: OPENAI_API_KEY
+        sync: false   # set this secret in Render Dashboard → Environment

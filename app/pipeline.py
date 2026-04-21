@@ -4,6 +4,8 @@ Processing Pipeline — orchestrates the full invoice editing flow.
 Flow:
   1. Extract invoice data from PDF (pdfplumber)
   2. Parse prompt → structured instructions
+     a. deterministic: regex parser (default, no API key needed)
+     b. ai:            GPT-4o-mini via Pydantic AI → same ParsedInstructions shape
   3. Deep-copy invoice → apply calculations
   4. Validate updated invoice
   5. Edit PDF with PyMuPDF using coordinate diffs
@@ -17,6 +19,7 @@ import copy
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from app.models import ExtractedInvoice, ParsedInstructions, ProcessingResult
 from app.parser.prompt_parser import parse_prompt
@@ -30,6 +33,7 @@ def run_pipeline(
     pdf_path: str | Path,
     prompt: str,
     output_dir: str | Path,
+    mode: Literal["deterministic", "ai"] = "deterministic",
 ) -> tuple[ProcessingResult, Path | None]:
     """
     Execute the full invoice editing pipeline.
@@ -38,6 +42,7 @@ def run_pipeline(
         pdf_path:   Path to the uploaded PDF.
         prompt:     Raw user prompt string.
         output_dir: Directory to write the output PDF into.
+        mode:       "deterministic" (default) or "ai".
 
     Returns:
         (ProcessingResult, output_pdf_path | None)
@@ -55,9 +60,16 @@ def run_pipeline(
             f"{len(original_invoice.aggregates)} aggregate fields"
         )
 
-        # -- Step 2: Parse prompt ---------------------------------------------
-        log.append("🔍 Step 2: Parsing prompt...")
-        instructions: ParsedInstructions = parse_prompt(prompt)
+        # -- Step 2: Parse prompt (deterministic OR ai) -----------------------
+        if mode == "ai":
+            log.append("🤖 Step 2: AI interpreting prompt (GPT-4o-mini)...")
+            from app.ai.prompt_interpreter import ai_interpret_prompt
+            instructions, reasoning = ai_interpret_prompt(prompt, original_invoice)
+            log.append(f"   AI reasoning: {reasoning}")
+        else:
+            log.append("🔍 Step 2: Parsing prompt (deterministic)...")
+            instructions: ParsedInstructions = parse_prompt(prompt)
+
         log.append(
             f"   {len(instructions.item_updates)} item updates, "
             f"{len(instructions.aggregate_updates)} aggregate updates, "

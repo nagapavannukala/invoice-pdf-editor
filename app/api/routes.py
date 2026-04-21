@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from typing import Literal
 
 from app.pipeline import run_pipeline
 
@@ -43,6 +44,7 @@ async def health() -> dict:
 async def process_invoice(
     file: UploadFile = File(..., description="Invoice PDF"),
     prompt: str = Form(..., description="Natural language editing prompt"),
+    mode: Literal["deterministic", "ai"] = Form("deterministic", description="Processing mode"),
 ) -> JSONResponse:
     """
     Upload a PDF invoice and a natural-language prompt.
@@ -72,6 +74,7 @@ async def process_invoice(
             pdf_path=tmp_path,
             prompt=prompt,
             output_dir=_OUTPUT_DIR,
+            mode=mode,
         )
 
         if result.success and output_path:
@@ -80,6 +83,7 @@ async def process_invoice(
         return JSONResponse(
             content={
                 "success": result.success,
+                "mode": mode,
                 "download_token": result.download_token,
                 "validation": result.validation.model_dump() if result.validation else None,
                 "errors": result.errors,

@@ -32,6 +32,13 @@
     #log-content { white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 12px; }
     /* Focus ring for accessibility */
     *:focus-visible { outline: 3px solid #0053e2; outline-offset: 2px; }
+    /* Mode toggle */
+    .mode-pill { transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+    .mode-pill.active-det  { background:#0053e2; color:#fff; box-shadow:0 2px 6px rgba(0,83,226,.35); }
+    .mode-pill.active-ai   { background:#ffc220; color:#1a1a1a; box-shadow:0 2px 6px rgba(255,194,32,.45); }
+    .mode-pill.inactive    { background:#f2f2f2; color:#767676; }
+    .ai-badge { background:#ffc220; color:#1a1a1a; }
+    .det-badge { background:#0053e2; color:#fff; }
   </style>
 </head>
 <body class="min-h-screen bg-wgray-10 font-sans text-wgray-160">
@@ -111,8 +118,47 @@
         Step 2 — Describe Your Edits
       </h2>
 
-      <!-- Template Dropdown -->
-      <div class="flex items-center gap-2 mb-2">
+      <!-- ── Mode Toggle ── -->
+      <div class="flex items-center gap-2 mb-4"
+           role="radiogroup" aria-label="Processing mode">
+        <span class="text-xs font-semibold text-wgray-100 mr-1">Mode:</span>
+        <button
+          id="btn-det"
+          role="radio"
+          aria-checked="true"
+          class="mode-pill active-det px-4 py-1.5 rounded-full text-xs font-bold"
+          onclick="setMode('deterministic')"
+        >⚙️ Rule-Based</button>
+        <button
+          id="btn-ai"
+          role="radio"
+          aria-checked="false"
+          class="mode-pill inactive px-4 py-1.5 rounded-full text-xs font-bold"
+          onclick="setMode('ai')"
+        >✨ AI Mode</button>
+        <span
+          id="mode-note"
+          class="text-xs text-wgray-100 ml-2 leading-snug"
+        >Structured syntax · no API key needed</span>
+      </div>
+
+      <!-- AI mode callout (hidden in deterministic mode) -->
+      <div id="ai-callout"
+        class="hidden mb-3 rounded-xl border border-wspark-100 bg-wspark-10 px-4 py-3 text-xs text-wspark-140 flex items-start gap-2">
+        <span class="text-base leading-none mt-0.5">✨</span>
+        <div>
+          <p class="font-semibold">AI Mode — write in plain English!</p>
+          <p class="text-wgray-100 mt-0.5">
+            Describe what you want in any phrasing — e.g.
+            <em>"Change the unit price for items 31–35 to 72.55 and recalculate everything."</em><br/>
+            Requires <code class="bg-wspark-10 border border-wspark-100 px-1 rounded">OPENAI_API_KEY</code>
+            set in Render environment variables.
+          </p>
+        </div>
+      </div>
+
+      <!-- Template Dropdown (hidden in AI mode) -->
+      <div id="template-row" class="flex items-center gap-2 mb-2">
         <label for="template-select" class="text-xs text-wgray-100 whitespace-nowrap">Load template:</label>
         <select
           id="template-select"
@@ -176,7 +222,12 @@
           <path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm4.707 7.293a1 1 0 0 1 0 1.414l-5 5a1 1 0 0 1-1.414 0l-2-2a1 1 0 1 1 1.414-1.414L11 13.586l4.293-4.293a1 1 0 0 1 1.414 0z"/>
         </svg>
         <div class="flex-1">
-          <p class="font-semibold text-wgreen-100 text-sm">Invoice processed successfully!</p>
+          <div class="flex items-center gap-2 flex-wrap">
+            <p class="font-semibold text-wgreen-100 text-sm">Invoice processed successfully!</p>
+            <span id="result-mode-badge"
+              class="px-2 py-0.5 rounded-full text-xs font-bold"
+            ></span>
+          </div>
           <p class="text-xs text-wgray-100 mt-0.5">All validations passed. Your edited PDF is ready.</p>
         </div>
         <a
@@ -244,10 +295,60 @@
   </footer>
 
   <script>
-    // ── State ──────────────────────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────────────────────
     let selectedFile = null;
+    let currentMode  = 'deterministic';
 
-    // ── Templates ──────────────────────────────────────────────────────────
+    // ── Mode Toggle ──────────────────────────────────────────────────────────────
+    const DET_PLACEHOLDER = `e.g.
+Update Unit Price for items 1–5 to EUR 150,00
+Recalculate Amount = Quantity × Unit Price
+Recalculate Ex Works
+Recalculate Total Up To`;
+
+    const AI_PLACEHOLDER = `Write in plain English, e.g.
+"Change the unit price for items 31–35 and 40 to 72.55 and recalculate all totals."
+"Increase freight to 3,500 and update the grand total."
+"Set unit price for item 1 to 200 and recompute everything."`;
+
+    function setMode(mode) {
+      currentMode = mode;
+      const isAI = mode === 'ai';
+
+      // Toggle button states
+      document.getElementById('btn-det').className =
+        `mode-pill ${isAI ? 'inactive' : 'active-det'} px-4 py-1.5 rounded-full text-xs font-bold`;
+      document.getElementById('btn-ai').className =
+        `mode-pill ${isAI ? 'active-ai' : 'inactive'} px-4 py-1.5 rounded-full text-xs font-bold`;
+      document.getElementById('btn-det').setAttribute('aria-checked', String(!isAI));
+      document.getElementById('btn-ai').setAttribute('aria-checked', String(isAI));
+
+      // Mode note
+      document.getElementById('mode-note').textContent = isAI
+        ? '✨ Plain English · powered by GPT-4o-mini'
+        : 'Structured syntax · no API key needed';
+
+      // Callout + template row visibility
+      document.getElementById('ai-callout').classList.toggle('hidden', !isAI);
+      document.getElementById('ai-callout').classList.toggle('flex', isAI);
+      document.getElementById('template-row').classList.toggle('hidden', isAI);
+
+      // Swap placeholder + hint
+      const ta   = document.getElementById('prompt-input');
+      const hint = document.getElementById('prompt-hint');
+      ta.placeholder = isAI ? AI_PLACEHOLDER : DET_PLACEHOLDER;
+      hint.textContent = isAI
+        ? 'Describe what you want in everyday language. AI will figure out the rest.'
+        : 'Be specific: mention item numbers, field names, and values. Use European number format (1.234,56).';
+
+      // Process button label
+      document.getElementById('process-btn').textContent =
+        isAI ? '✨ Process with AI' : '⚡ Process Invoice';
+
+      hideResults();
+    }
+
+    // ── Templates ─────────────────────────────────────────────────────────────────
     const TEMPLATES = {
       update_unit_prices: `Update Unit Price for items 1-5 to EUR 150,00
 Recalculate Amount = Quantity × Unit Price
@@ -270,11 +371,10 @@ Recalculate Total Up To`,
     function loadTemplate(key) {
       if (!key) return;
       document.getElementById('prompt-input').value = TEMPLATES[key] || '';
-      // Reset select
       document.getElementById('template-select').value = '';
     }
 
-    // ── Drag & Drop ────────────────────────────────────────────────────────
+    // ── Drag & Drop ───────────────────────────────────────────────────────────────
     const dropZone = document.getElementById('drop-zone');
 
     dropZone.addEventListener('dragover', (e) => {
@@ -308,7 +408,6 @@ Recalculate Total Up To`,
       document.getElementById('drop-idle').classList.add('hidden');
       document.getElementById('drop-selected').classList.remove('hidden');
       document.getElementById('drop-selected').classList.add('flex');
-      // Reset result panel
       hideResults();
     }
 
@@ -322,7 +421,7 @@ Recalculate Total Up To`,
       hideResults();
     }
 
-    // ── Process ────────────────────────────────────────────────────────────
+    // ── Process ─────────────────────────────────────────────────────────────────
     async function processInvoice() {
       const prompt = document.getElementById('prompt-input').value.trim();
 
@@ -339,6 +438,7 @@ Recalculate Total Up To`,
       const formData = new FormData();
       formData.append('file', selectedFile, selectedFile.name);
       formData.append('prompt', prompt);
+      formData.append('mode', currentMode);   // ← new
 
       try {
         const response = await fetch('/api/process', {
@@ -362,24 +462,35 @@ Recalculate Total Up To`,
     }
 
     function setProcessing(active) {
-      const btn = document.getElementById('process-btn');
+      const btn     = document.getElementById('process-btn');
       const spinner = document.getElementById('spinner');
-      btn.disabled = active;
-      btn.textContent = active ? '⏳ Processing…' : '⚡ Process Invoice';
+      btn.disabled  = active;
+      const idleLabel = currentMode === 'ai' ? '✨ Process with AI' : '⚡ Process Invoice';
+      btn.textContent = active ? '⏳ Processing…' : idleLabel;
       spinner.classList.toggle('hidden', !active);
       spinner.classList.toggle('flex', active);
     }
 
     function showSuccess(data) {
-      const panel = document.getElementById('result-panel');
-      const successEl = document.getElementById('result-success');
-      const errorEl = document.getElementById('result-error');
-      const downloadBtn = document.getElementById('download-btn');
+      const panel      = document.getElementById('result-panel');
+      const successEl  = document.getElementById('result-success');
+      const errorEl    = document.getElementById('result-error');
+      const downloadBtn= document.getElementById('download-btn');
+      const badge      = document.getElementById('result-mode-badge');
 
       successEl.classList.remove('hidden');
       errorEl.classList.add('hidden');
       downloadBtn.href = `/api/download/${data.download_token}`;
       downloadBtn.setAttribute('download', 'invoice_edited.pdf');
+
+      // Mode badge
+      if (data.mode === 'ai') {
+        badge.textContent  = '✨ AI Mode';
+        badge.className    = 'ai-badge px-2 py-0.5 rounded-full text-xs font-bold';
+      } else {
+        badge.textContent  = '⚙️ Rule-Based';
+        badge.className    = 'det-badge px-2 py-0.5 rounded-full text-xs font-bold';
+      }
 
       renderValidation(data.validation);
       renderLog(data.log_summary);
@@ -389,9 +500,9 @@ Recalculate Total Up To`,
     }
 
     function showError(data) {
-      const panel = document.getElementById('result-panel');
+      const panel     = document.getElementById('result-panel');
       const successEl = document.getElementById('result-success');
-      const errorEl = document.getElementById('result-error');
+      const errorEl   = document.getElementById('result-error');
       const errorList = document.getElementById('error-list');
 
       successEl.classList.add('hidden');
@@ -416,16 +527,16 @@ Recalculate Total Up To`,
       const valPanel = document.getElementById('validation-panel');
       if (!validation) { valPanel.classList.add('hidden'); return; }
 
-      const checks = validation.checks || {};
+      const checks   = validation.checks || {};
       const warnings = validation.warnings || [];
 
       const checksEl = document.getElementById('validation-checks');
-      const warnEl = document.getElementById('validation-warnings');
+      const warnEl   = document.getElementById('validation-warnings');
 
       checksEl.innerHTML = '';
       Object.entries(checks).forEach(([key, passed]) => {
         const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        const div = document.createElement('div');
+        const div   = document.createElement('div');
         div.className = 'flex items-center gap-2';
         div.innerHTML = `
           <span class="${passed ? 'text-wgreen-100' : 'text-wred-100'} font-bold">${passed ? '✔' : '✘'}</span>
@@ -442,8 +553,7 @@ Recalculate Total Up To`,
     }
 
     function renderLog(logLines) {
-      const el = document.getElementById('log-content');
-      el.textContent = (logLines || []).join('\n');
+      document.getElementById('log-content').textContent = (logLines || []).join('\n');
     }
 
     function hideResults() {
@@ -453,10 +563,10 @@ Recalculate Total Up To`,
       document.getElementById('validation-panel').classList.add('hidden');
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────
+    // ── Helpers ─────────────────────────────────────────────────────────────────
     function formatBytes(bytes) {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      if (bytes < 1024)            return `${bytes} B`;
+      if (bytes < 1024 * 1024)    return `${(bytes / 1024).toFixed(1)} KB`;
       return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     }
 
