@@ -87,6 +87,12 @@ class ExtractedInvoice(BaseModel):
     aggregates: dict[FieldName, AggregateSection] = Field(default_factory=dict)
     raw_text_blocks: list[dict] = Field(default_factory=list)  # for audit/debug
 
+    # Page 2 "Invoice certified…for the amount of" bold words line.
+    # Populated by the extractor using a fitz font-aware pass.
+    # Empty string / None means the line was not found (non-fatal).
+    amount_in_words_text: str = ""
+    amount_in_words_bbox: Optional[tuple[int, float, float, float, float]] = None
+
     model_config = {"arbitrary_types_allowed": True}
 
 

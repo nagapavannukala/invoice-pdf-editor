@@ -19,8 +19,9 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
-from app.models import ExtractedInvoice, InvoiceItem
+from app.models import ExtractedInvoice, FieldName, InvoiceItem
 from app.calculator.number_fmt import format_european
+from app.calculator.amount_words import amount_to_words
 
 # Fallback fonts (PyMuPDF built-ins)
 _FONT_REGULAR = "helv"   # Helvetica
@@ -50,14 +51,12 @@ class _Op:
     font_size: float = 9.0
     is_bold: bool = False
     # Exact PDF baseline y-coordinate extracted from span["origin"][1].
-    # insert_text() places glyphs ON this coordinate, so copying it verbatim
-    # gives pixel-perfect vertical alignment with the original text.
-    # 0.0 means detection failed → fall back to bbox.y1 - _BASELINE_FALLBACK_OFFSET.
     origin_y: float = 0.0
     # Exact x where the original glyph run started (span["origin"][0]).
-    # Used as fallback left anchor for left-anchored fields (e.g. unit prices)
-    # so that same-width replacements land at the exact same x position.
     origin_x: float = 0.0
+    # When True: insertion is LEFT-aligned to tight_rect.x0 instead of
+    # right-aligned to col_x1.  Used for the amount-in-words prose line.
+    left_aligned: bool = False
 
 
 class PDFEditor:
@@ -123,6 +122,29 @@ class PDFEditor:
                     log=log,
                 )
 
+        # ── Auto-update amount-in-words whenever Total After changes ────────────────
+        # No extra prompt keyword required — this is a derived field.
+        orig_after = original.aggregates.get(FieldName.TOTAL_AFTER)
+        upd_after  = updated.aggregates.get(FieldName.TOTAL_AFTER)
+        if (
+            orig_after is not None
+            and upd_after is not None
+            and upd_after.value != orig_after.value
+            and original.amount_in_words_bbox is not None
+            and original.amount_in_words_text
+        ):
+            new_words = amount_to_words(upd_after.value)
+            self._schedule(
+                orig_text=original.amount_in_words_text,
+                new_text=new_words,
+                bbox=original.amount_in_words_bbox,
+                label="Amount In Words",
+                log=log,
+                left_aligned=True,
+            )
+            log.append(f"   ✒ Words: '{original.amount_in_words_text}'")
+            log.append(f"       → '{new_words}'")
+
     def commit(self, log: list[str]) -> None:
         """Apply all scheduled replacements in-place on the document."""
         # Group by page
@@ -139,33 +161,47 @@ class PDFEditor:
                     _detect_font_info(page, op.tight_rect)
                 )
 
-            # ── Phase 2: add all redaction annotations ───────────────────
+            # ── Phase 2: add all redaction annotations ────────────────────────
             for op in ops:
                 fontname = _FONT_BOLD if op.is_bold else _FONT_REGULAR
-                redact_rect = _widen_rect(
-                    op.tight_rect, op.col_x1,
-                    op.new_text, fontname, op.font_size,
-                )
+                if op.left_aligned:
+                    # Cover from original x0 to the rightmost of:
+                    # original text right edge OR rendered new text right edge.
+                    rendered_w = fitz.get_text_length(
+                        op.new_text, fontname=fontname, fontsize=op.font_size
+                    )
+                    right = max(op.tight_rect.x1, op.tight_rect.x0 + rendered_w)
+                    redact_rect = fitz.Rect(
+                        op.tight_rect.x0 - _REDACT_PADDING,
+                        op.tight_rect.y0,
+                        right + _REDACT_PADDING,
+                        op.tight_rect.y1,
+                    )
+                else:
+                    redact_rect = _widen_rect(
+                        op.tight_rect, op.col_x1,
+                        op.new_text, fontname, op.font_size,
+                    )
                 page.add_redact_annot(redact_rect, fill=(1, 1, 1))
 
             # ── Phase 3: bake redactions (erase original text) ───────────
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
-            # ── Phase 4: insert replacement text (right-aligned) ─────────
+            # ── Phase 4: insert replacement text ────────────────────────────
             for op in ops:
                 fontname = _FONT_BOLD if op.is_bold else _FONT_REGULAR
                 text_w   = fitz.get_text_length(
                     op.new_text, fontname=fontname, fontsize=op.font_size
                 )
 
-                # ── X positioning ────────────────────────────────────────────
-                # Right-align the replacement to the original text's RIGHT edge
-                # (tight_rect.x1 = right edge of the matched text from search_for).
-                # For same-width replacements (e.g. unit prices) this places the
-                # new text at ~the same x as the original.
-                # For wider replacements (long amounts) the text correctly
-                # extends further left — standard right-aligned column behaviour.
-                x0 = max(0.0, op.tight_rect.x1 - text_w)
+                # ── X positioning ─────────────────────────────────────────────
+                if op.left_aligned:
+                    # Left-align to where the original span started.
+                    # Used for the prose words line — not a numeric column.
+                    x0 = op.tight_rect.x0
+                else:
+                    # Right-align the replacement to the original right edge.
+                    x0 = max(0.0, op.tight_rect.x1 - text_w)
 
                 # ── Y positioning (the critical fix) ─────────────────────────
                 # Use span["origin"][1] captured in Phase 1.  This is the EXACT
@@ -242,6 +278,7 @@ class PDFEditor:
         bbox,
         label: str,
         log: list[str],
+        left_aligned: bool = False,
     ) -> None:
         """
         Locate orig_text in the PDF near bbox, queue an _Op for it.
@@ -286,6 +323,7 @@ class PDFEditor:
             new_text=new_text,
             tight_rect=tight_rect,
             col_x1=col_x1,
+            left_aligned=left_aligned,
         ))
 
 

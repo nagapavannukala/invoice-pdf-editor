@@ -15,6 +15,7 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
+import fitz  # PyMuPDF — used for font-aware words-line detection
 import pdfplumber
 
 from app.models import (
@@ -77,6 +78,11 @@ def extract_invoice(pdf_path: str | Path) -> ExtractedInvoice:
 
             rows = _cluster_into_rows(words, page_idx)
             _parse_rows(rows, invoice)
+
+    # Fitz-based pass: locate the bold "amount in words" span.
+    # pdfplumber fragments long bold lines into individual words which makes
+    # reliable reconstruction hard.  fitz gives us the full span in one shot.
+    _extract_amount_in_words(pdf_path, invoice)
 
     return invoice
 
@@ -288,3 +294,45 @@ def _bbox(
 ) -> tuple[int, float, float, float, float]:
     """Build a bbox tuple from a pdfplumber word dict."""
     return (page, word["x0"], word["top"], word["x1"], word["bottom"])
+
+
+def _extract_amount_in_words(
+    pdf_path: str | Path, invoice: ExtractedInvoice
+) -> None:
+    """
+    Scan all pages with fitz to find the bold uppercase span that contains
+    the invoice amount written in words (e.g. "ONE MILLION … US DOLLAR EIGHTY").
+
+    Signature span characteristics:
+      • Font contains "bold" (case-insensitive)
+      • Text contains "US DOLLAR" (all caps)
+
+    Populates invoice.amount_in_words_text and invoice.amount_in_words_bbox.
+    Non-fatal if not found — feature is simply disabled for that PDF.
+    """
+    doc = fitz.open(str(pdf_path))
+    try:
+        for page_idx in range(len(doc)):
+            page = doc[page_idx]
+            for block in page.get_text("dict")["blocks"]:
+                if block.get("type") != 0:
+                    continue
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text = span["text"].strip()
+                        font = span.get("font", "").lower()
+                        if "bold" not in font or "US DOLLAR" not in text:
+                            continue
+                        # Found it — capture text and bbox
+                        bx = span["bbox"]  # (x0, y0, x1, y1) in PDF points
+                        invoice.amount_in_words_text = text
+                        invoice.amount_in_words_bbox = (
+                            page_idx,
+                            float(bx[0]),
+                            float(bx[1]),
+                            float(bx[2]),
+                            float(bx[3]),
+                        )
+                        return  # first match wins
+    finally:
+        doc.close()
