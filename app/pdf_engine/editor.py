@@ -31,8 +31,9 @@ _FONT_BOLD    = "hebo"   # Helvetica-Bold
 # bleeds into adjacent columns (the quantity column is the closest neighbour).
 _REDACT_PADDING = 3.0
 
-# How far ABOVE the bounding-box bottom we place the text baseline.
-_BASELINE_OFFSET = 1.5     # pts
+# Fallback baseline offset used ONLY when span-origin detection fails entirely.
+# In normal operation we use span["origin"][1] directly — the real PDF baseline.
+_BASELINE_FALLBACK_OFFSET = 1.5   # pts above bbox.y1
 
 
 @dataclass
@@ -45,9 +46,18 @@ class _Op:
     tight_rect: fitz.Rect
     # Right edge of the column — the replacement is right-aligned to this x
     col_x1: float
-    # Font info detected BEFORE redacting
+    # ── Detected from source span BEFORE redacting (Phase 1) ──
     font_size: float = 9.0
     is_bold: bool = False
+    # Exact PDF baseline y-coordinate extracted from span["origin"][1].
+    # insert_text() places glyphs ON this coordinate, so copying it verbatim
+    # gives pixel-perfect vertical alignment with the original text.
+    # 0.0 means detection failed → fall back to bbox.y1 - _BASELINE_FALLBACK_OFFSET.
+    origin_y: float = 0.0
+    # Exact x where the original glyph run started (span["origin"][0]).
+    # Used as fallback left anchor for left-anchored fields (e.g. unit prices)
+    # so that same-width replacements land at the exact same x position.
+    origin_x: float = 0.0
 
 
 class PDFEditor:
@@ -123,9 +133,11 @@ class PDFEditor:
         for page_idx, ops in by_page.items():
             page = self._doc[page_idx]
 
-            # ── Phase 1: detect fonts BEFORE any redaction ──────────────
+            # ── Phase 1: detect fonts + exact baseline BEFORE any redaction ─
             for op in ops:
-                op.font_size, op.is_bold = _detect_font_info(page, op.tight_rect)
+                op.font_size, op.is_bold, op.origin_y, op.origin_x = (
+                    _detect_font_info(page, op.tight_rect)
+                )
 
             # ── Phase 2: add all redaction annotations ───────────────────
             for op in ops:
@@ -145,9 +157,26 @@ class PDFEditor:
                 text_w   = fitz.get_text_length(
                     op.new_text, fontname=fontname, fontsize=op.font_size
                 )
-                # Right-align: end at col_x1, expand left as needed
-                x0 = max(0.0, op.col_x1 - text_w)
-                y  = op.tight_rect.y1 - _BASELINE_OFFSET   # baseline
+
+                # ── X positioning ────────────────────────────────────────────
+                # Right-align the replacement to the original text's RIGHT edge
+                # (tight_rect.x1 = right edge of the matched text from search_for).
+                # For same-width replacements (e.g. unit prices) this places the
+                # new text at ~the same x as the original.
+                # For wider replacements (long amounts) the text correctly
+                # extends further left — standard right-aligned column behaviour.
+                x0 = max(0.0, op.tight_rect.x1 - text_w)
+
+                # ── Y positioning (the critical fix) ─────────────────────────
+                # Use span["origin"][1] captured in Phase 1.  This is the EXACT
+                # PDF baseline coordinate — the same coordinate system that
+                # insert_text() uses.  No more estimation needed.
+                # Fallback: bbox.y1 - offset (old behaviour, only if detection
+                # failed and origin_y was left at its 0.0 sentinel).
+                if op.origin_y > 0:
+                    y = op.origin_y
+                else:
+                    y = op.tight_rect.y1 - _BASELINE_FALLBACK_OFFSET
 
                 page.insert_text(
                     fitz.Point(x0, y),
@@ -159,6 +188,7 @@ class PDFEditor:
                 log.append(
                     f"  ✏ '{op.orig_text}' → '{op.new_text}'  "
                     f"page {page_idx+1} @ ({x0:.1f},{y:.1f}) "
+                    f"[origin_y={'detected' if op.origin_y > 0 else 'fallback'}] "
                     f"font={fontname} {op.font_size}pt"
                 )
 
@@ -263,32 +293,53 @@ class PDFEditor:
 # Module-level utility functions
 # ---------------------------------------------------------------------------
 
-def _detect_font_info(page: fitz.Page, near: fitz.Rect) -> tuple[float, bool]:
+def _detect_font_info(
+    page: fitz.Page, near: fitz.Rect
+) -> tuple[float, bool, float, float]:
     """
-    Find the nearest text span to `near` and return (font_size, is_bold).
-    Falls back to (9.0, False) if nothing is found.
+    Find the nearest text span to `near` and return
+    (font_size, is_bold, origin_y, origin_x).
+
+    origin_y / origin_x are the span's ``span["origin"]`` coordinates —
+    the exact PDF glyph baseline.  insert_text() expects to receive this
+    y value directly, so copying it verbatim eliminates vertical drift.
+
+    Falls back to (9.0, False, 0.0, 0.0) if no span is found.
+    The 0.0 sentinel for origin_y tells the caller to use the bbox fallback.
     """
-    best_size = 9.0
-    best_bold = False
+    best_size:     float = 9.0
+    best_bold:     bool  = False
+    best_origin_y: float = 0.0   # 0.0 = "not found" sentinel
+    best_origin_x: float = 0.0
     min_dist = float("inf")
+
+    # Pre-compute the centre of the search rect once
+    cx = (near.x0 + near.x1) / 2
+    cy = (near.y0 + near.y1) / 2
 
     for block in page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]:
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
             for span in line.get("spans", []):
+                if span.get("size", 0) <= 0:
+                    continue
                 sr = fitz.Rect(span["bbox"])
-                # Manhattan distance between centers
-                dx = abs((sr.x0 + sr.x1) / 2 - (near.x0 + near.x1) / 2)
-                dy = abs((sr.y0 + sr.y1) / 2 - (near.y0 + near.y1) / 2)
+                # Manhattan distance between centres (fast, good enough)
+                dx = abs((sr.x0 + sr.x1) / 2 - cx)
+                dy = abs((sr.y0 + sr.y1) / 2 - cy)
                 dist = dx + dy
-                if dist < min_dist and span.get("size", 0) > 0:
+                if dist < min_dist:
                     min_dist = dist
                     best_size = span["size"]
                     font_name = span.get("font", "").lower()
                     best_bold = "bold" in font_name
+                    # span["origin"] = (x, y) of the glyph baseline origin
+                    origin = span.get("origin", (0.0, 0.0))
+                    best_origin_x = float(origin[0])
+                    best_origin_y = float(origin[1])
 
-    return best_size, best_bold
+    return best_size, best_bold, best_origin_y, best_origin_x
 
 
 def _widen_rect(
