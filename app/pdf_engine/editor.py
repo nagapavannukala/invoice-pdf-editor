@@ -26,9 +26,10 @@ from app.calculator.number_fmt import format_european
 _FONT_REGULAR = "helv"   # Helvetica
 _FONT_BOLD    = "hebo"   # Helvetica-Bold
 
-# Minimum column width (pts) reserved for any number cell.
-# Ensures long EU-format values like "1.380.916,70" (13 chars ≈ 58 pts) fit.
-_MIN_AMOUNT_WIDTH = 72.0   # 9 chars × 8pt char ≈ 72 pts (conservative)
+# Extra breathing room (pts) added around replacement text when sizing the
+# redaction rectangle.  Kept deliberately small so the whitened area never
+# bleeds into adjacent columns (the quantity column is the closest neighbour).
+_REDACT_PADDING = 3.0
 
 # How far ABOVE the bounding-box bottom we place the text baseline.
 _BASELINE_OFFSET = 1.5     # pts
@@ -87,12 +88,16 @@ class PDFEditor:
             if orig is None:
                 continue
 
+            # Quantity is READ-ONLY: it is extracted for calculations only.
+            # We never write it back unless the user explicitly asks for a
+            # quantity change — which is a separate instruction type not yet
+            # implemented.  Touching it would reformat "1.634" → "1.634,00"
+            # (format_european always emits 2 decimal places), corrupting
+            # the layout for integer quantities.
             self._diff_field("Unit Price", orig.unit_price, upd.unit_price,
                              orig.unit_price_bbox, log)
             self._diff_field("Amount",     orig.amount,     upd.amount,
                              orig.amount_bbox, log)
-            self._diff_field("Quantity",   orig.quantity,   upd.quantity,
-                             orig.quantity_bbox, log)
 
         for field, upd_agg in updated.aggregates.items():
             orig_agg = original.aggregates.get(field)
@@ -124,7 +129,11 @@ class PDFEditor:
 
             # ── Phase 2: add all redaction annotations ───────────────────
             for op in ops:
-                redact_rect = _widen_rect(op.tight_rect, op.col_x1, op.font_size)
+                fontname = _FONT_BOLD if op.is_bold else _FONT_REGULAR
+                redact_rect = _widen_rect(
+                    op.tight_rect, op.col_x1,
+                    op.new_text, fontname, op.font_size,
+                )
                 page.add_redact_annot(redact_rect, fill=(1, 1, 1))
 
             # ── Phase 3: bake redactions (erase original text) ───────────
@@ -282,15 +291,29 @@ def _detect_font_info(page: fitz.Page, near: fitz.Rect) -> tuple[float, bool]:
     return best_size, best_bold
 
 
-def _widen_rect(tight: fitz.Rect, col_x1: float, font_size: float) -> fitz.Rect:
+def _widen_rect(
+    tight: fitz.Rect,
+    col_x1: float,
+    new_text: str,
+    fontname: str,
+    font_size: float,
+) -> fitz.Rect:
     """
-    Return a rect that guarantees any EU-format replacement value will fit.
-    Extends the tight rect to the LEFT by _MIN_AMOUNT_WIDTH from col_x1,
-    and adds a tiny right margin.
+    Return a redaction rect that is exactly wide enough for new_text.
+
+    Width = max(original text width, rendered new_text width) + _REDACT_PADDING.
+    This is computed per-replacement so a short unit-price replacement like
+    '72,55' does NOT widen as far left as a long amount like '1.380.916,70',
+    which previously caused the whitening box to clip the adjacent quantity
+    column.
     """
-    left = col_x1 - _MIN_AMOUNT_WIDTH
-    left = min(left, tight.x0)          # never narrower than original
-    right = col_x1 + 1.0               # +1 pt margin to catch anti-alias artifacts
+    rendered_w = fitz.get_text_length(new_text, fontname=fontname, fontsize=font_size)
+    orig_w     = tight.x1 - tight.x0
+    needed_w   = max(rendered_w, orig_w) + _REDACT_PADDING
+
+    left  = col_x1 - needed_w
+    left  = min(left, tight.x0)    # never cut right of where text started
+    right = col_x1 + 1.0           # +1 pt anti-alias margin
     return fitz.Rect(left, tight.y0, right, tight.y1)
 
 
