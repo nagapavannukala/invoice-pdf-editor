@@ -28,17 +28,26 @@ from app.calculator.number_fmt import parse_european
 # Vertical tolerance (points) for grouping words into the same row
 _ROW_TOLERANCE = 4.0
 
-# Keywords that signal aggregate rows (case-insensitive)
+# Keywords that signal aggregate rows (case-insensitive).
+# IMPORTANT: longer/more-specific phrases first — first match wins.
 _AGG_KEYWORDS: dict[str, FieldName] = {
-    "ex works": FieldName.EX_WORKS,
-    "ex-works": FieldName.EX_WORKS,
-    "exworks": FieldName.EX_WORKS,
-    "freight": FieldName.FREIGHT,
-    "insurance": FieldName.INSURANCE,
-    "total up to": FieldName.TOTAL_UP_TO,
-    "total upto": FieldName.TOTAL_UP_TO,
-    "total after": FieldName.TOTAL_AFTER,
-    "grand total": FieldName.TOTAL_AFTER,
+    "ex works amount":       FieldName.EX_WORKS,
+    "ex works":              FieldName.EX_WORKS,
+    "ex-works":              FieldName.EX_WORKS,
+    "exworks":               FieldName.EX_WORKS,
+    "freight + container":   FieldName.FREIGHT,
+    "freight and container": FieldName.FREIGHT,
+    "freight":               FieldName.FREIGHT,
+    "insurance":             FieldName.INSURANCE,
+    # Real PDF label is "Total Amount Up to" — "amount" sits between the key words
+    "total amount up to":    FieldName.TOTAL_UP_TO,
+    "total amount up":       FieldName.TOTAL_UP_TO,
+    "total up to":           FieldName.TOTAL_UP_TO,
+    "total upto":            FieldName.TOTAL_UP_TO,
+    # Real PDF label is "Total Amount After"
+    "total amount after":    FieldName.TOTAL_AFTER,
+    "total after":           FieldName.TOTAL_AFTER,
+    "grand total":           FieldName.TOTAL_AFTER,
 }
 
 # Pattern: a cell looks like a number (European or US, optional currency)

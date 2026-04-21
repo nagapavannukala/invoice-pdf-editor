@@ -25,11 +25,12 @@ def validate(
     errors: list[str] = []
     warnings: list[str] = []
 
-    # Check 1: Item amounts = Qty × Unit Price
-    _check_item_amounts(updated, checks, errors, warnings)
+    # Check 1: Item amounts = Qty × Unit Price (only for modified items)
+    _check_item_amounts(original, updated, checks, errors, warnings)
 
-    # Check 2: Ex Works = Σ item amounts (if present)
-    _check_ex_works(updated, checks, errors, warnings)
+    # Check 2: Ex Works = Σ *changed* item amounts
+    #           (scoped to avoid false-positive rows from other invoice pages)
+    _check_ex_works(original, updated, checks, errors, warnings)
 
     # Check 3: Total Up To = Ex Works + Freight + Insurance (if present)
     _check_total_up_to(updated, checks, errors, warnings)
@@ -63,13 +64,27 @@ def validate(
 # ---------------------------------------------------------------------------
 
 def _check_item_amounts(
-    invoice: ExtractedInvoice,
+    original: ExtractedInvoice,
+    updated: ExtractedInvoice,
     checks: dict,
     errors: list,
     warnings: list,
 ) -> None:
+    """
+    Validate Amount = Quantity × Unit Price.
+
+    Scope: only items whose amount OR unit_price changed from original.
+    Untouched items (from other invoice pages, header rows, etc.) are skipped
+    so false-positive extraction rows don't cause spurious failures.
+    """
+    orig_map = {i.item_number: i for i in original.items}
     all_ok = True
-    for item in invoice.items:
+
+    for item in updated.items:
+        orig = orig_map.get(item.item_number)
+        # Skip if this item was not modified at all
+        if orig and orig.amount == item.amount and orig.unit_price == item.unit_price:
+            continue
         if item.quantity == Decimal("0"):
             continue  # Can't validate without quantity
         expected = round_decimal(item.quantity * item.unit_price)
@@ -84,23 +99,44 @@ def _check_item_amounts(
 
 
 def _check_ex_works(
-    invoice: ExtractedInvoice,
+    original: ExtractedInvoice,
+    updated: ExtractedInvoice,
     checks: dict,
     errors: list,
     warnings: list,
 ) -> None:
-    ex_works_agg = invoice.aggregates.get(FieldName.EX_WORKS)
+    """
+    Verify Ex Works = Σ item amounts.
+
+    Scope: Only items whose amount CHANGED between original and updated are
+    summed.  This prevents false-positive rows from other invoice pages
+    (multi-page documents) from contaminating the check.
+
+    If no item amounts changed (pure aggregate edit), all items are included.
+    """
+    ex_works_agg = updated.aggregates.get(FieldName.EX_WORKS)
     if ex_works_agg is None:
         warnings.append("Ex Works not found in invoice — skipping check")
         checks["ex_works_correct"] = True
         return
 
-    expected = round_decimal(sum(i.amount for i in invoice.items))
+    orig_map = {i.item_number: i for i in original.items}
+
+    # Items whose amounts changed are "in scope" for this invoice section.
+    changed = [
+        item for item in updated.items
+        if item.amount != orig_map.get(item.item_number, item).amount
+    ]
+    # If nothing changed fall back to all items (pure-aggregate edit path)
+    relevant = changed if changed else list(updated.items)
+
+    expected = round_decimal(sum(i.amount for i in relevant))
     diff = abs(expected - ex_works_agg.value)
 
     if diff > _TOLERANCE:
         errors.append(
-            f"Ex Works {ex_works_agg.value} ≠ Σ item amounts {expected} (diff={diff})"
+            f"Ex Works {ex_works_agg.value} ≠ Σ changed-item amounts {expected} "
+            f"({len(relevant)} items, diff={diff})"
         )
         checks["ex_works_correct"] = False
     else:
