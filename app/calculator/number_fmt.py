@@ -8,32 +8,79 @@ import re
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 
-def parse_european(value: str) -> Decimal:
+def parse_european(value: str, eu_first: bool = True) -> Decimal:
     """
-    Parse a European-formatted number string to Decimal.
+    Parse a number string to Decimal, format-agnostic with EU-first heuristics.
+
+    Disambiguation rules (applied in order):
+      1. Both separators, comma LAST  → EU  (1.234,56  → 1234.56)
+      2. Both separators, dot LAST    → US  (1,234.56  → 1234.56)
+      3. Only dots, multiple          → EU thousands  (1.234.567 → 1234567)
+      4. Only one dot, eu_first=True, exactly 3 digits after dot
+                                      → EU thousands  (1.634 → 1634)
+      5. Only one dot, other          → decimal        (62.45 → 62.45)
+      6. Only comma(s), single comma  → EU decimal     (72,55 → 72.55)
+      7. Multiple commas, no dot      → EU thousands   (remove all)
+      8. No separators                → integer
 
     Examples:
-        '1.234,56'  → Decimal('1234.56')
-        '1.234.567,89' → Decimal('1234567.89')
-        '100,00'    → Decimal('100.00')
-        '1,234.56'  → Decimal('1234.56')  (US fallback)
+        '1.634'       → Decimal('1634')      # EU thousands (rule 4)
+        '3.993'       → Decimal('3993')      # EU thousands (rule 4)
+        '62,45'       → Decimal('62.45')     # EU decimal   (rule 6)
+        '1.234,56'    → Decimal('1234.56')   # EU mixed     (rule 1)
+        '102.043,30'  → Decimal('102043.30') # EU mixed     (rule 1)
+        '1,234.56'    → Decimal('1234.56')   # US mixed     (rule 2)
+        '1234.56'     → Decimal('1234.56')   # plain decimal (rule 5)
     """
     v = value.strip().replace("\u00a0", "").replace(" ", "")
-    # Strip leading currency codes (e.g. EUR, USD, GBP) and symbols
-    v = re.sub(r"^[A-Z]{2,3}", "", v)  # 3-letter currency codes first
-    v = re.sub(r"^[€$£¥₹]", "", v)    # symbol fallback
+    # Strip 2–3 letter currency codes (EUR, USD, GBP …)
+    v = re.sub(r"^[A-Z]{2,3}", "", v)
+    # Strip currency symbols
+    v = re.sub(r"^[€$£¥₹]", "", v)
+    # Strip trailing unit info like '/1 EA', 'EA', 'pcs'
+    v = re.sub(r"[/\\].*$", "", v)
+    v = re.sub(r"\s*[A-Za-z]+\s*$", "", v)
+    v = v.strip()
 
-    # Detect format: if last separator is comma → European
-    last_dot = v.rfind(".")
+    if not v:
+        raise ValueError(f"Cannot parse number: '{value}'")
+
+    has_dot   = "." in v
+    has_comma = "," in v
+    dot_count   = v.count(".")
+    comma_count = v.count(",")
+    last_dot   = v.rfind(".")
     last_comma = v.rfind(",")
 
-    if last_comma > last_dot:
-        # European: dots are thousands, comma is decimal
-        v = v.replace(".", "").replace(",", ".")
-    elif last_dot > last_comma:
-        # US/standard: commas are thousands, dot is decimal
-        v = v.replace(",", "")
-    # else: no separator at all, or only one type — leave as is
+    if has_dot and has_comma:
+        # Both separators present — last one is the decimal
+        if last_comma > last_dot:
+            # Rule 1: EU format  e.g. 1.234,56
+            v = v.replace(".", "").replace(",", ".")
+        else:
+            # Rule 2: US format  e.g. 1,234.56
+            v = v.replace(",", "")
+
+    elif has_dot and not has_comma:
+        # Only dots
+        if dot_count > 1:
+            # Rule 3: multiple dots → all EU thousands  e.g. 1.234.567
+            v = v.replace(".", "")
+        elif eu_first and (len(v) - last_dot - 1) == 3:
+            # Rule 4: single dot + exactly 3 trailing digits → EU thousands
+            # e.g. 1.634 → 1634,  3.993 → 3993
+            v = v.replace(".", "")
+        # else Rule 5: dot is decimal separator → leave as-is
+
+    elif has_comma and not has_dot:
+        # Only commas
+        if comma_count == 1:
+            # Rule 6: EU decimal  e.g. 72,55 → 72.55
+            v = v.replace(",", ".")
+        else:
+            # Rule 7: multiple commas, no dot → treat all as thousands
+            v = v.replace(",", "")
+    # else Rule 8: no separators → pure integer, leave as-is
 
     try:
         return Decimal(v)

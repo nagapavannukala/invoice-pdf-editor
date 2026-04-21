@@ -12,7 +12,30 @@ from app.calculator.number_fmt import (
 )
 
 
-# ── parse_european ──────────────────────────────────────────────────────────
+# ── EU-first disambiguation (the nasty cases) ───────────────────────────────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    # EU thousands — single dot + exactly 3 trailing digits
+    ("1.634",  Decimal("1634")),
+    ("3.993",  Decimal("3993")),
+    ("1.000",  Decimal("1000")),
+    ("9.999",  Decimal("9999")),
+    # NOT EU thousands — dot with 1 or 2 digits → decimal
+    ("62.45",  Decimal("62.45")),
+    ("100.00", Decimal("100.00")),
+    ("1.5",    Decimal("1.5")),
+])
+def test_eu_first_disambiguation(raw, expected):
+    assert parse_european(raw) == expected
+
+
+def test_unit_suffix_stripped():
+    """Values like '72,55 USD /1 EA' from prompts should parse cleanly."""
+    assert parse_european("72,55 USD /1 EA") == Decimal("72.55")
+    assert parse_european("150,00 EUR /1 EA") == Decimal("150.00")
+
+
+# ── parse_european ────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("raw, expected", [
     ("1.234,56", Decimal("1234.56")),
