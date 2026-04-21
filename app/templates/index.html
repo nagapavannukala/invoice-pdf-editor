@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Invoice PDF Editor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            wblue:   { 100: '#0053e2', 110: '#0047c2', 130: '#00339a' },
+            wspark:  { 10: '#fff8e6', 100: '#ffc220', 140: '#995213' },
+            wred:    { 100: '#ea1100' },
+            wgreen:  { 100: '#2a8703' },
+            wgray:   { 10: '#f2f2f2', 50: '#c2c2c2', 100: '#767676', 160: '#1a1a1a' },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    /* Drag-active state */
+    .drop-active { border-color: #0053e2 !important; background-color: #eff4ff !important; }
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 1s linear infinite; }
+    /* Smooth transitions */
+    .section-fade { transition: opacity 0.3s ease, transform 0.3s ease; }
+    /* Log pre-wrap */
+    #log-content { white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 12px; }
+    /* Focus ring for accessibility */
+    *:focus-visible { outline: 3px solid #0053e2; outline-offset: 2px; }
+  </style>
+</head>
+<body class="min-h-screen bg-wgray-10 font-sans text-wgray-160">
+
+  <!-- ── Header ── -->
+  <header class="bg-wblue-100 text-white shadow-lg">
+    <div class="max-w-3xl mx-auto px-6 py-4 flex items-center gap-3">
+      <svg class="w-8 h-8 flex-shrink-0" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <rect width="40" height="40" rx="8" fill="#ffc220"/>
+        <path d="M8 14h24M8 20h16M8 26h20" stroke="#0053e2" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="30" cy="26" r="5" fill="white" stroke="#0053e2" stroke-width="2"/>
+        <path d="M28 26l1.5 1.5L32 24" stroke="#0053e2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <h1 class="text-xl font-bold leading-tight">Invoice PDF Editor</h1>
+        <p class="text-blue-200 text-xs">Edit invoice values with natural language — no technical setup required</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ── -->
+  <main class="max-w-3xl mx-auto px-6 py-8 space-y-6" role="main">
+
+    <!-- ── Upload Zone ── -->
+    <section aria-labelledby="upload-heading">
+      <h2 id="upload-heading" class="text-base font-semibold mb-2 text-wgray-160">
+        Step 1 — Upload Invoice PDF
+      </h2>
+      <div
+        id="drop-zone"
+        role="button"
+        tabindex="0"
+        aria-label="Click or drag and drop a PDF invoice to upload"
+        class="border-2 border-dashed border-wgray-50 rounded-xl p-10 text-center cursor-pointer
+               hover:border-wblue-100 hover:bg-blue-50 transition-colors"
+        onclick="document.getElementById('file-input').click()"
+        onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('file-input').click()"
+      >
+        <input
+          type="file"
+          id="file-input"
+          accept=".pdf"
+          class="hidden"
+          aria-label="PDF invoice file input"
+          onchange="handleFileSelect(this)"
+        />
+        <div id="drop-idle" class="space-y-2">
+          <svg class="w-12 h-12 mx-auto text-wgray-50" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M24 4v28M14 20l10-10 10 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8 36h32" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          <p class="text-wgray-100 text-sm">Drag &amp; drop PDF here, or <span class="text-wblue-100 font-semibold">click to browse</span></p>
+          <p class="text-wgray-50 text-xs">PDF only · Max 20 MB</p>
+        </div>
+        <div id="drop-selected" class="hidden items-center justify-center gap-3">
+          <svg class="w-8 h-8 text-wred-100 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/>
+            <path d="M14 2v6h6" fill="white"/>
+            <text x="6" y="19" font-size="5" fill="white" font-family="sans-serif" font-weight="bold">PDF</text>
+          </svg>
+          <div class="text-left">
+            <p id="file-name" class="font-semibold text-wgray-160 text-sm"></p>
+            <p id="file-size" class="text-wgray-100 text-xs"></p>
+          </div>
+          <button
+            class="ml-auto text-wgray-100 hover:text-wred-100 text-xs underline"
+            onclick="clearFile(event)"
+            aria-label="Remove selected file"
+          >Remove</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Prompt Templates + Input ── -->
+    <section aria-labelledby="prompt-heading">
+      <h2 id="prompt-heading" class="text-base font-semibold mb-2 text-wgray-160">
+        Step 2 — Describe Your Edits
+      </h2>
+
+      <!-- Template Dropdown -->
+      <div class="flex items-center gap-2 mb-2">
+        <label for="template-select" class="text-xs text-wgray-100 whitespace-nowrap">Load template:</label>
+        <select
+          id="template-select"
+          class="text-xs border border-wgray-50 rounded-lg px-3 py-1.5 bg-white text-wgray-160
+                 focus:border-wblue-100 focus:ring-1 focus:ring-wblue-100 outline-none flex-1"
+          onchange="loadTemplate(this.value)"
+          aria-label="Prompt templates"
+        >
+          <option value="">— Choose a template —</option>
+          <option value="update_unit_prices">Update Unit Prices (items 1–5)</option>
+          <option value="recalculate_all">Full Recalculation</option>
+          <option value="update_freight">Update Freight &amp; Recalculate Totals</option>
+          <option value="custom_item">Custom Item Update</option>
+        </select>
+      </div>
+
+      <textarea
+        id="prompt-input"
+        rows="7"
+        placeholder="e.g.&#10;Update Unit Price for items 1–5 to EUR 150,00&#10;Recalculate Amount = Quantity × Unit Price&#10;Recalculate Ex Works&#10;Recalculate Total Up To"
+        class="w-full border border-wgray-50 rounded-xl px-4 py-3 text-sm text-wgray-160
+               focus:border-wblue-100 focus:ring-2 focus:ring-blue-100 outline-none
+               resize-y min-h-[140px] bg-white"
+        aria-label="Natural language editing prompt"
+        aria-describedby="prompt-hint"
+      ></textarea>
+      <p id="prompt-hint" class="text-xs text-wgray-100 mt-1">
+        Be specific: mention item numbers, field names, and values. Use European number format (1.234,56).
+      </p>
+    </section>
+
+    <!-- ── Process Button ── -->
+    <div class="flex gap-3 items-center">
+      <button
+        id="process-btn"
+        onclick="processInvoice()"
+        class="bg-wblue-100 hover:bg-wblue-110 active:bg-wblue-130 text-white font-bold
+               px-8 py-3 rounded-xl text-sm transition-colors
+               disabled:opacity-50 disabled:cursor-not-allowed
+               focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-wblue-100"
+        aria-live="polite"
+      >
+        ⚡ Process Invoice
+      </button>
+      <div id="spinner" class="hidden items-center gap-2 text-sm text-wgray-100">
+        <svg class="spinner w-5 h-5 text-wblue-100" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" stroke="#e5e7eb" stroke-width="3"/>
+          <path d="M12 2a10 10 0 0 1 10 10" stroke="#0053e2" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <span>Processing — this may take a few seconds…</span>
+      </div>
+    </div>
+
+    <!-- ── Result Panel ── -->
+    <div id="result-panel" class="hidden section-fade space-y-4" aria-live="polite" aria-atomic="true">
+
+      <!-- Success banner -->
+      <div id="result-success"
+        class="hidden bg-green-50 border border-wgreen-100 rounded-xl p-4 flex items-start gap-3">
+        <svg class="w-6 h-6 text-wgreen-100 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm4.707 7.293a1 1 0 0 1 0 1.414l-5 5a1 1 0 0 1-1.414 0l-2-2a1 1 0 1 1 1.414-1.414L11 13.586l4.293-4.293a1 1 0 0 1 1.414 0z"/>
+        </svg>
+        <div class="flex-1">
+          <p class="font-semibold text-wgreen-100 text-sm">Invoice processed successfully!</p>
+          <p class="text-xs text-wgray-100 mt-0.5">All validations passed. Your edited PDF is ready.</p>
+        </div>
+        <a
+          id="download-btn"
+          href="#"
+          class="bg-wgreen-100 hover:opacity-90 text-white font-bold px-5 py-2 rounded-lg text-sm
+                 flex items-center gap-2 transition-opacity whitespace-nowrap"
+          aria-label="Download edited invoice PDF"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M10 3v9m0 0l-3-3m3 3l3-3M4 15h12" stroke="currentColor" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          Download PDF
+        </a>
+      </div>
+
+      <!-- Error banner -->
+      <div id="result-error"
+        class="hidden bg-red-50 border border-wred-100 rounded-xl p-4 flex items-start gap-3">
+        <svg class="w-6 h-6 text-wred-100 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm-1 5h2v6h-2V7zm0 8h2v2h-2v-2z"/>
+        </svg>
+        <div>
+          <p class="font-semibold text-wred-100 text-sm">Processing failed</p>
+          <ul id="error-list" class="text-xs text-wgray-160 mt-1 list-disc list-inside space-y-1"></ul>
+        </div>
+      </div>
+
+      <!-- Validation Summary -->
+      <div id="validation-panel" class="hidden bg-white border border-wgray-50 rounded-xl p-4">
+        <h3 class="font-semibold text-sm mb-3 flex items-center gap-2">
+          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 0 1 0 1.414l-8 8a1 1 0 0 1-1.414 0l-4-4a1 1 0 1 1 1.414-1.414L8 12.586l7.293-7.293a1 1 0 0 1 1.414 0z"/>
+          </svg>
+          Validation Summary
+        </h3>
+        <div id="validation-checks" class="space-y-1.5 text-xs"></div>
+        <div id="validation-warnings" class="mt-2 space-y-1 text-xs text-wspark-140"></div>
+      </div>
+
+      <!-- Log Accordion -->
+      <details class="bg-white border border-wgray-50 rounded-xl overflow-hidden">
+        <summary
+          class="cursor-pointer px-4 py-3 text-sm font-semibold text-wgray-100
+                 hover:bg-wgray-10 select-none flex items-center justify-between"
+        >
+          <span>📋 Processing Log</span>
+          <svg class="w-4 h-4 transition-transform details-arrow" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 0 1 1.414 0L10 10.586l3.293-3.293a1 1 0 1 1 1.414 1.414l-4 4a1 1 0 0 1-1.414 0l-4-4a1 1 0 0 1 0-1.414z"/>
+          </svg>
+        </summary>
+        <div class="border-t border-wgray-10 p-4 max-h-64 overflow-y-auto bg-wgray-10">
+          <pre id="log-content" class="text-wgray-100 leading-relaxed"></pre>
+        </div>
+      </details>
+
+    </div><!-- /result-panel -->
+
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer class="mt-12 py-4 border-t border-wgray-50 text-center text-xs text-wgray-100">
+    Invoice PDF Editor · Files are processed securely and never stored permanently
+  </footer>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────
+    let selectedFile = null;
+
+    // ── Templates ──────────────────────────────────────────────────────────
+    const TEMPLATES = {
+      update_unit_prices: `Update Unit Price for items 1-5 to EUR 150,00
+Recalculate Amount = Quantity × Unit Price
+Recalculate Ex Works
+Recalculate Total Up To`,
+
+      recalculate_all: `Recalculate Amount = Quantity × Unit Price
+Recalculate Ex Works
+Recalculate Total Up To`,
+
+      update_freight: `Update Freight to EUR 2.500,00
+Recalculate Total Up To`,
+
+      custom_item: `Update Unit Price for item 3 to EUR 200,00
+Recalculate Amount = Quantity × Unit Price
+Recalculate Ex Works
+Recalculate Total Up To`,
+    };
+
+    function loadTemplate(key) {
+      if (!key) return;
+      document.getElementById('prompt-input').value = TEMPLATES[key] || '';
+      // Reset select
+      document.getElementById('template-select').value = '';
+    }
+
+    // ── Drag & Drop ────────────────────────────────────────────────────────
+    const dropZone = document.getElementById('drop-zone');
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drop-active');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-active'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drop-active');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) applyFile(file);
+    });
+
+    function handleFileSelect(input) {
+      if (input.files?.[0]) applyFile(input.files[0]);
+    }
+
+    function applyFile(file) {
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showToast('Please upload a PDF file.', 'error');
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        showToast('File is too large. Max 20 MB.', 'error');
+        return;
+      }
+      selectedFile = file;
+      document.getElementById('file-name').textContent = file.name;
+      document.getElementById('file-size').textContent = formatBytes(file.size);
+      document.getElementById('drop-idle').classList.add('hidden');
+      document.getElementById('drop-selected').classList.remove('hidden');
+      document.getElementById('drop-selected').classList.add('flex');
+      // Reset result panel
+      hideResults();
+    }
+
+    function clearFile(e) {
+      e.stopPropagation();
+      selectedFile = null;
+      document.getElementById('file-input').value = '';
+      document.getElementById('drop-idle').classList.remove('hidden');
+      document.getElementById('drop-selected').classList.add('hidden');
+      document.getElementById('drop-selected').classList.remove('flex');
+      hideResults();
+    }
+
+    // ── Process ────────────────────────────────────────────────────────────
+    async function processInvoice() {
+      const prompt = document.getElementById('prompt-input').value.trim();
+
+      if (!selectedFile) {
+        showToast('Please upload a PDF first.', 'error'); return;
+      }
+      if (!prompt) {
+        showToast('Please enter an editing prompt.', 'error'); return;
+      }
+
+      setProcessing(true);
+      hideResults();
+
+      const formData = new FormData();
+      formData.append('file', selectedFile, selectedFile.name);
+      formData.append('prompt', prompt);
+
+      try {
+        const response = await fetch('/api/process', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showSuccess(data);
+        } else {
+          showError(data);
+        }
+
+      } catch (err) {
+        showError({ errors: [`Network error: ${err.message}`], log_summary: [] });
+      } finally {
+        setProcessing(false);
+      }
+    }
+
+    function setProcessing(active) {
+      const btn = document.getElementById('process-btn');
+      const spinner = document.getElementById('spinner');
+      btn.disabled = active;
+      btn.textContent = active ? '⏳ Processing…' : '⚡ Process Invoice';
+      spinner.classList.toggle('hidden', !active);
+      spinner.classList.toggle('flex', active);
+    }
+
+    function showSuccess(data) {
+      const panel = document.getElementById('result-panel');
+      const successEl = document.getElementById('result-success');
+      const errorEl = document.getElementById('result-error');
+      const downloadBtn = document.getElementById('download-btn');
+
+      successEl.classList.remove('hidden');
+      errorEl.classList.add('hidden');
+      downloadBtn.href = `/api/download/${data.download_token}`;
+      downloadBtn.setAttribute('download', 'invoice_edited.pdf');
+
+      renderValidation(data.validation);
+      renderLog(data.log_summary);
+
+      panel.classList.remove('hidden');
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function showError(data) {
+      const panel = document.getElementById('result-panel');
+      const successEl = document.getElementById('result-success');
+      const errorEl = document.getElementById('result-error');
+      const errorList = document.getElementById('error-list');
+
+      successEl.classList.add('hidden');
+      errorEl.classList.remove('hidden');
+      errorList.innerHTML = '';
+
+      const errors = data.errors?.length ? data.errors : ['Unknown error occurred.'];
+      errors.forEach(e => {
+        const li = document.createElement('li');
+        li.textContent = e;
+        errorList.appendChild(li);
+      });
+
+      renderValidation(data.validation);
+      renderLog(data.log_summary);
+
+      panel.classList.remove('hidden');
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function renderValidation(validation) {
+      const valPanel = document.getElementById('validation-panel');
+      if (!validation) { valPanel.classList.add('hidden'); return; }
+
+      const checks = validation.checks || {};
+      const warnings = validation.warnings || [];
+
+      const checksEl = document.getElementById('validation-checks');
+      const warnEl = document.getElementById('validation-warnings');
+
+      checksEl.innerHTML = '';
+      Object.entries(checks).forEach(([key, passed]) => {
+        const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const div = document.createElement('div');
+        div.className = 'flex items-center gap-2';
+        div.innerHTML = `
+          <span class="${passed ? 'text-wgreen-100' : 'text-wred-100'} font-bold">${passed ? '✔' : '✘'}</span>
+          <span class="${passed ? 'text-wgray-160' : 'text-wred-100'}">${label}</span>
+        `;
+        checksEl.appendChild(div);
+      });
+
+      warnEl.innerHTML = warnings.map(w =>
+        `<p class="flex items-start gap-1"><span class="text-wspark-100">⚠</span><span>${w}</span></p>`
+      ).join('');
+
+      valPanel.classList.remove('hidden');
+    }
+
+    function renderLog(logLines) {
+      const el = document.getElementById('log-content');
+      el.textContent = (logLines || []).join('\n');
+    }
+
+    function hideResults() {
+      document.getElementById('result-panel').classList.add('hidden');
+      document.getElementById('result-success').classList.add('hidden');
+      document.getElementById('result-error').classList.add('hidden');
+      document.getElementById('validation-panel').classList.add('hidden');
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function formatBytes(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function showToast(msg, type = 'info') {
+      const toast = document.createElement('div');
+      const color = type === 'error' ? 'bg-wred-100' : 'bg-wblue-100';
+      toast.className = `fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl text-white text-sm
+                         shadow-lg ${color} transition-all`;
+      toast.setAttribute('role', 'alert');
+      toast.textContent = msg;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3500);
+    }
+  </script>
+</body>
+</html>
