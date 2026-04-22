@@ -7,10 +7,23 @@ Serves:
 
 Run with:
   uvicorn app.main:app --reload --port 8000
+
+Secrets:
+  Locally  → copy .env.example → .env, fill in your key. Never commit .env.
+  Render   → set OPENAI_API_KEY in Dashboard → Environment (sync:false).
+             Real env vars always win over .env (load_dotenv doesn't override).
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+# Load .env file for local development.
+# On Render the env var is already set, so this is a no-op (override=False).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)   # never clobbers real environment variables
+except ImportError:
+    pass  # python-dotenv not installed — fine in prod if env vars are set directly
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

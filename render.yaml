@@ -13,3 +13,5 @@ services:
         value: "1"
       - key: OPENAI_API_KEY
         sync: false   # set this secret in Render Dashboard → Environment
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini   # change to gpt-4o for higher accuracy (costs more)

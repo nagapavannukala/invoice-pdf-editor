@@ -179,9 +179,11 @@ def ai_interpret_prompt(
             "Set the OPENAI_API_KEY environment variable in your Render dashboard."
         )
 
+    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
+
     # Build the agent (constructed per-call so the key is always fresh)
     provider = OpenAIProvider(api_key=api_key)
-    model    = OpenAIChatModel("gpt-4o-mini", provider=provider)
+    model    = OpenAIChatModel(model_name, provider=provider)
     agent: Agent[None, _AIOutput] = Agent(
         model=model,
         output_type=_AIOutput,

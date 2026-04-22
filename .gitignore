@@ -17,6 +17,7 @@ env/
 # Environment variables (never commit secrets)
 .env
 .env.*
+!.env.example
 local.env
 
 # pytest / coverage
